@@ -49,75 +49,100 @@ Make sure the plug has that screw on the bottom!
 
 ```yaml
 substitutions:
-  devicename: "gosund_sp111"
+  devicename: "Gniazdo_Salon"
   upper_devicename: "Gosund SP111"
-  # Higher value gives lower watt readout
-  current_res: "0.00280"
-  # Lower value gives lower voltage readout. In my case of about 15 of those devices this value is closest to my voltage meter
-  voltage_div: "648"
+  current_res: "0.00120"
+  voltage_div: "732"
 
 esphome:
-  name: $devicename
+  name: gniazdkosalon
+  friendly_name: Gniazdo Salon
 
 esp8266:
-  board: esp8285
-  # This allows the device to restore the last saved relay state, either "ON" or "OFF" for the switch later in this config
-  restore_from_flash: true
-
-preferences:
-  flash_write_interval: 1min # set to 5min to prevent wearing out the onboard flash module too quickly
-
-# Enable logging
-logger:
-  baud_rate: 0
-
-# Enable Home Assistant API
-api:
-  encryption:
-    key: "REDACTED"
-
-ota:
-  password: "REDACTED"
+  board: esp01_1m
+  board_flash_mode: dout
 
 wifi:
-  ssid: !secret wifi_ssid
-  password: !secret wifi_password
+  networks:
+    - ssid: !secret wifi_ssid
+      password: !secret wifi_password
+    - ssid: !secret wifi_ssid2
+      password: !secret wifi_password2
+
   ap:
+    ssid: "gniazdosalon"
+    password: !secret wifi_ap_password
 
-captive_portal:
+  min_auth_mode: WPA2
+  manual_ip:
+    static_ip: 10.0.0.56
+    gateway: 10.0.0.1
+    subnet: 255.255.255.0
 
-# see: https://esphome.io/components/time.html
+logger:
+  level: INFO
+
+web_server:
+  port: 80
+  version: 3
+  auth:
+    username: !secret web_server_username
+    password: !secret web_server_password
+
 time:
+  - platform: sntp
+    id: sntp_time
+    timezone: Europe/Warsaw
+    servers:
+      - ntp1.tp.pl
+      - 1.pool.ntp.org
+      - 2.pool.ntp.org
   - platform: homeassistant
     id: homeassistant_time
 
-# Enable Web server
-web_server:
-  port: 80
+api:
+  encryption:
+    key: !secret api_key
 
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+captive_portal:
+
+####################################
+# TEXT SENSOR
+####################################
 text_sensor:
   - platform: version
-    name: "${devicename} - Version"
+    name: "${devicename} - Wersja"
     icon: mdi:cube-outline
 
+####################################
+# BINARY SENSOR
+####################################
 binary_sensor:
   - platform: status
     name: "${devicename} - Status"
     device_class: connectivity
+    icon: mdi:lan-connect
 
-  # toggle relay on/off
   - platform: gpio
     pin:
       number: GPIO13
       mode: INPUT_PULLUP
-      inverted: True
+      inverted: true
     id: "${devicename}_button_state"
+    icon: mdi:gesture-tap-button
     on_press:
       - switch.toggle: button_switch
 
+####################################
+# SENSORS
+####################################
 sensor:
   - platform: wifi_signal
-    name: "${devicename} - Wifi Signal"
+    name: "${devicename} - WiFi"
     update_interval: 60s
     icon: mdi:wifi
 
@@ -127,23 +152,22 @@ sensor:
     icon: mdi:clock-outline
 
   - platform: total_daily_energy
-    name: "${devicename} - Todays Usage"
+    name: "${devicename} - Dzienne Zużycie"
     power_id: "power_wattage"
     filters:
-      # Multiplication factor from W to kW is 0.001
       - multiply: 0.001
     unit_of_measurement: kWh
     icon: mdi:calendar-clock
 
   - platform: adc
     pin: VCC
-    name: "${devicename} - VCC Volt"
+    name: "${devicename} - VCC"
     icon: mdi:flash-outline
 
   - platform: hlw8012
     sel_pin:
       number: GPIO12
-      inverted: True
+      inverted: true
     cf_pin: GPIO05
     cf1_pin: GPIO04
     change_mode_every: 4
@@ -152,27 +176,68 @@ sensor:
     update_interval: 3s
 
     current:
-      name: "${devicename} - Ampere"
+      id: current_sensor
+      name: "${devicename} - Prąd"
       unit_of_measurement: A
       accuracy_decimals: 3
       icon: mdi:current-ac
 
     voltage:
-      name: "${devicename} - Volt"
+      id: voltage_sensor
+      name: "${devicename} - Napięcie"
       unit_of_measurement: V
       accuracy_decimals: 1
       icon: mdi:flash-outline
 
     power:
-      name: "${devicename} - Watt"
+      id: power_wattage
+      name: "${devicename} - Moc"
       unit_of_measurement: W
-      id: "power_wattage"
+      accuracy_decimals: 1
       icon: mdi:gauge
 
+####################################
+# Power Factor / Moc pozorna / Moc bierna
+####################################
+  - platform: template
+    name: "${devicename} - Power Factor"
+    unit_of_measurement: ""
+    accuracy_decimals: 2
+    icon: mdi:angle-acute
+    lambda: |-
+      if (id(voltage_sensor).has_state() && id(current_sensor).has_state()) {
+        float pf = id(power_wattage).state / (id(voltage_sensor).state * id(current_sensor).state);
+        if (pf > 1.0) return 1.0;
+        return pf;
+      }
+      return 0.0;
+
+  - platform: template
+    name: "${devicename} - Moc pozorna"
+    unit_of_measurement: VA
+    accuracy_decimals: 1
+    icon: mdi:sine-wave
+    lambda: |-
+      return id(voltage_sensor).state * id(current_sensor).state;
+
+  - platform: template
+    name: "${devicename} - Moc bierna"
+    unit_of_measurement: var
+    accuracy_decimals: 1
+    icon: mdi:triangle-outline
+    lambda: |-
+      float s = id(voltage_sensor).state * id(current_sensor).state;
+      float p = id(power_wattage).state;
+      if (s > p) return sqrt((s * s) - (p * p));
+      return 0.0;
+
+####################################
+# LED
+####################################
 status_led:
   pin:
     number: GPIO02
-    inverted: True
+    inverted: true
   id: led_blue
 
 output:
@@ -181,12 +246,14 @@ output:
     inverted: true
     id: led_red
 
+####################################
+# SWITCH
+####################################
 switch:
   - platform: template
     name: "${devicename} - Switch"
-    icon: mdi:power
+    icon: mdi:power-socket-eu
     optimistic: true
-    # This is where the "restore_from_flash" comes in. I set it to try to restore from flash and, if that fails, set it to ON
     restore_mode: RESTORE_DEFAULT_ON
     lambda: "return id(relay).state;"
     id: button_switch
@@ -196,6 +263,7 @@ switch:
     turn_off_action:
       - switch.turn_off: relay
       - output.turn_off: led_red
+
   - platform: gpio
     pin: GPIO15
     id: relay
